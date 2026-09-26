@@ -1,21 +1,40 @@
 # Summarize the most recent Simon Willison article with Gemini.
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import feedparser
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors
 
 from fetch_feeds import DAYS_BACK, REQUEST_HEADERS, is_recent
 
 SIMON_FEED_URL = "https://simonwillison.net/atom/everything/"
+MAX_ATTEMPTS = 4
+BACKOFF_SECONDS = [2, 4, 8]
 
 
 def get_article_text(entry):
     if "content" in entry:
         return entry.content[0].value
     return entry.summary
+
+
+def generate_with_retry(client, model, contents):
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return client.models.generate_content(model=model, contents=contents)
+        except errors.ServerError as e:
+            if e.code != 503 or attempt == MAX_ATTEMPTS:
+                raise
+            wait_seconds = BACKOFF_SECONDS[attempt - 1]
+            print(
+                f"Gemini returned 503, retrying in {wait_seconds} seconds "
+                f"(attempt {attempt}/{MAX_ATTEMPTS})"
+            )
+            time.sleep(wait_seconds)
 
 
 def main():
@@ -41,7 +60,8 @@ def main():
         f"Text: {article_text}"
     )
 
-    response = client.models.generate_content(
+    response = generate_with_retry(
+        client=client,
         model="gemini-flash-latest",
         contents=prompt,
     )
